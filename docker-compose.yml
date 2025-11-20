@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  api:
+    build: ./api
+    ports:
+      - "5000:5000"
+    environment:
+      - OPENAI_API_KEY=
+    volumes:
+      - ./uploads:/app/uploads
+      - ./chunks:/app/chunks
+    depends_on:
+      - mongo
+      - worker
+
+  worker:
+    build: ./worker
+    environment:
+      - OPENAI_API_KEY=
+    volumes:
+      - ./chunks:/app/chunks
+      - ./uploads:/app/uploads
+    deploy:
+      mode: replicated
+      replicas: 4  # parallel workers
+
+  mongo:
+    image: mongo
+    restart: always
+    ports:
+      - "27017:27017"

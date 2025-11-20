@@ -1,0 +1,8 @@
+# Ignore the chunks folder
+/chunks/
+
+# Ignore the uploads folder
+/uploads/
+
+# Ignore environment file
+.env
