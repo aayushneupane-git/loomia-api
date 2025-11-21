@@ -18,7 +18,6 @@ services:
     build: ./worker
     environment:
       - OPENAI_API_KEY=
-    volumes:
       - ./chunks:/app/chunks
       - ./uploads:/app/uploads
     deploy:
