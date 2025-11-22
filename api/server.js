@@ -9,10 +9,19 @@ import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
 import dotenv from "dotenv";
 import FormData from "form-data";
+import cors from "cors";
+
 dotenv.config();
 
 const app = express();
 app.use(express.json());
+
+app.use(
+  cors({
+    origin: "http://localhost:3000", // your frontend URL
+    credentials: true,               // if you use cookies/auth headers
+  })
+);
 
 /* ================================ 📌 ROUTES ================================ */
 app.use("/auth", authRoutes);
