@@ -9,7 +9,10 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "axios": "^1.7.2",
     "openai": "^4.58.1",
+    "dotenv": "^16.6.1",
+    "multer": "2.0.2",
     "fs-extra": "^11.2.0"
   }
 }

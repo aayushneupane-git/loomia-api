@@ -11,18 +11,18 @@ services:
       - ./uploads:/app/uploads
       - ./chunks:/app/chunks
     depends_on:
-      - mongo
       - worker
 
   worker:
     build: ./worker
     environment:
       - OPENAI_API_KEY=
+    volumes:
+      - ./uploads:/app/worker_uploads
       - ./chunks:/app/chunks
-      - ./uploads:/app/uploads
     deploy:
       mode: replicated
-      replicas: 4  # parallel workers
+      replicas: 4  # parallel workers for speed
 
   mongo:
     image: mongo

@@ -1,91 +1,77 @@
 import express from "express";
-import fs from "fs";
-import path from "path";
+import multer from "multer";
 import { spawn } from "child_process";
-import OpenAI from "openai";
+import fs from "fs";
+import FormData from "form-data";
+import axios from "axios";
+import dotenv from "dotenv";
 
+dotenv.config();
 const app = express();
-app.use(express.json());
+const upload = multer({ dest: "worker_uploads/" });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+/* ============================================================
+   🎧 Extract + Transcribe Chunk
+   ============================================================ */
+app.post("/process", upload.single("file"), async (req, res) => {
+  try {
+    const videoPath = req.file.path;
+    const audioPath = videoPath + ".mp3";
+
+    await extractAudio(videoPath, audioPath);
+
+    const transcript = await transcribeAudio(audioPath);
+
+    fs.unlinkSync(videoPath); // cleanup
+    fs.unlinkSync(audioPath);
+
+    res.json({ text: transcript });
+  } catch (err) {
+    console.error("WORKER ERROR:", err);
+    res.status(500).json({ error: true, message: "Worker failed" });
+  }
 });
 
-/**
- * ========= UTIL: Extract audio from video =============
- */
-function extractAudio(videoPath) {
+/* ============================================================
+   🎬 Convert Video → MP3
+   ============================================================ */
+function extractAudio(input, output) {
   return new Promise((resolve, reject) => {
-    const output = videoPath.replace(/\.\w+$/, ".mp3");
-
     const ffmpeg = spawn("ffmpeg", [
-      "-y", // overwrite if exists
-      "-i", videoPath,
+      "-i", input,
       "-vn",
-      "-acodec", "libmp3lame",
+      "-acodec", "mp3",
       output
     ]);
 
-    ffmpeg.on("error", (err) => reject(err));
     ffmpeg.on("exit", (code) => {
-      if (code === 0) resolve(output);
-      else reject(new Error(`FFmpeg exited with code ${code}`));
+      if (code === 0) resolve();
+      else reject("FFmpeg audio error");
     });
   });
 }
 
-/**
- * ========= UTIL: Transcribe audio via OpenAI ==========
- */
-async function transcribeAudio(audioPath) {
-  try {
-    const result = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioPath),
-      model: "gpt-4o-mini-transcribe", // or "whisper-1"
-      response_format: "text"
-    });
-    return result;
-  } catch (err) {
-    console.error("Transcription Error:", err.response?.data || err);
-    throw new Error("Transcription failed");
-  }
+/* ============================================================
+   🗣 Send Audio to OpenAI Whisper
+   ============================================================ */
+async function transcribeAudio(audioFile) {
+  const form = new FormData();
+  form.append("file", fs.createReadStream(audioFile));
+  form.append("model", "gpt-4o-transcribe");
+
+  const response = await axios.post("https://api.openai.com/v1/audio/transcriptions", form, {
+    headers: {
+      ...form.getHeaders(),
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+  });
+
+  return response.data.text;
 }
 
-/**
- * =============== MAIN WORKER ENDPOINT ===================
- */
-app.post("/process", async (req, res) => {
-  const { filePath } = req.body;
-
-  if (!filePath || !fs.existsSync(filePath)) {
-    return res.status(400).json({ error: "Invalid file path" });
-  }
-
-  try {
-    console.log(`🎬 Worker received: ${filePath}`);
-
-    // Convert video -> mp3
-    const audioPath = await extractAudio(filePath);
-    console.log(`🎧 Audio extracted: ${audioPath}`);
-
-    // Transcribe
-    const text = await transcribeAudio(audioPath);
-    console.log("📝 Transcription completed!");
-
-    // Cleanup
-    try { fs.unlinkSync(audioPath); console.log("🧹 Temp audio cleaned"); } catch {}
-
-    return res.json({ text });
-
-  } catch (error) {
-    console.error("❌ Worker failed:", error.message);
-    return res.status(500).json({ error: "Worker processing failed" });
-  }
-});
-
-/**
- * ==================== SERVER START =======================
- */
-app.listen(5001, "0.0.0.0", () =>
-  console.log("⚙️ Worker running on port 5001")
-);
+/* ============================================================
+   🚀 Worker Start
+   ============================================================ */
+app.listen(5001, () => console.log("Worker running on port 5001"));
