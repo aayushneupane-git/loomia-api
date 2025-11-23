@@ -5,53 +5,61 @@ import { spawn } from "child_process";
 import fs from "fs";
 import axios from "axios";
 import mongoose from "mongoose";
-import authRoutes from "./routes/auth.js";
-import saveRoutes from "./routes/save.js";
 import dotenv from "dotenv";
 import FormData from "form-data";
-dotenv.config();
 
+import authRoutes from "./routes/auth.js";
+import saveRoutes from "./routes/save.js";
+
+dotenv.config();
 const app = express();
 app.use(express.json());
 
-/* ================================ 📌 ROUTES ================================ */
+/* ================================ ROUTES ================================ */
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
-/* ================================ 📌 MULTER ================================ */
-const upload = multer({ dest: "uploads/" });
+/* ================================ MULTER ================================ */
+const upload = multer({ storage: multer.memoryStorage() });
 
-/* ================================ 📌 UPLOAD FLOW ================================ */
+/* ================================ VIDEO UPLOAD ================================ */
 app.post("/upload", upload.single("video"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No video uploaded" });
 
-    const videoFile = req.file.path;
-    const splitOutputDir = path.join("chunks", Date.now().toString());
-    fs.mkdirSync(splitOutputDir, { recursive: true });
+    const timestamp = Date.now().toString();
+    const uploadDir = path.join("uploads", timestamp);
+    const chunkDir = path.join("chunks", timestamp);
 
-    // ➤ Split into chunks
-    await splitVideo(videoFile, splitOutputDir);
+    fs.mkdirSync(uploadDir, { recursive: true });
+    fs.mkdirSync(chunkDir, { recursive: true });
 
-    // ➤ Process chunks in worker
-    const chunkFiles = fs.readdirSync(splitOutputDir);
+    const videoPath = path.join(uploadDir, req.file.originalname);
+    fs.writeFileSync(videoPath, req.file.buffer);
 
-    const transcriptionPromises = chunkFiles.map(async (chunk) => {
-      const filePath = path.join(splitOutputDir, chunk);
-      const form = new FormData();
-      form.append("file", fs.createReadStream(filePath));
+    const chunkFiles = await splitVideo(videoPath, chunkDir);
 
-      const resp = await axios.post("http://worker:5001/process", form, {
-        headers: form.getHeaders(),
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      });
+    // Send chunks to workers
+    const transcriptionPromises = chunkFiles.map(async (filePath, idx) => {
+      try {
+        const form = new FormData();
+        form.append("file", fs.createReadStream(filePath));
 
-      return resp.data.text;
+        const resp = await axios.post("http://worker:5001/process", form, {
+          headers: form.getHeaders(),
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
+        });
+
+        return resp.data.text || "";
+      } catch (err) {
+        console.error(`Worker error on chunk ${idx}:`, err.response?.data || err.message);
+        return "";
+      }
     });
 
     const transcriptions = await Promise.all(transcriptionPromises);
-    const fullText = transcriptions.join(" ");
+    const fullText = transcriptions.join(" ").trim();
 
     const summary = await summarizeText(fullText);
     const quiz = await generateQuiz(fullText);
@@ -63,30 +71,31 @@ app.post("/upload", upload.single("video"), async (req, res) => {
   }
 });
 
-/* ================================ 🎬 FFmpeg Split ================================ */
-function splitVideo(input, outputDir) {
+/* ================================ VIDEO SPLIT ================================ */
+function splitVideo(videoPath, outputDir) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
-      "-i", input,
+      "-i", videoPath,
+      "-c", "copy",
       "-f", "segment",
-      "-segment_time", "300",
+      "-segment_time", "60",
       "-reset_timestamps", "1",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
 
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
-
     ffmpeg.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error("FFmpeg split failed"));
+      if (code !== 0) return reject(new Error("FFmpeg split failed"));
+      const chunks = fs.readdirSync(outputDir)
+        .map(f => path.join(outputDir, f));
+      resolve(chunks);
     });
   });
 }
 
-/* ================================ 🤖 Summarization ================================ */
+/* ================================ SUMMARIZATION ================================ */
 async function summarizeText(text) {
   const fetch = (await import("node-fetch")).default;
-
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -101,39 +110,27 @@ async function summarizeText(text) {
       ],
     }),
   });
-
   const data = await res.json();
-  return data.choices[0]?.message?.content || "";
+  return data.choices?.[0]?.message?.content || "";
 }
 
-/* ================================ 🧠 Quiz Fix Helper ================================ */
+/* ================================ QUIZ GENERATION ================================ */
 function fixQuizAnswers(quiz) {
   if (!Array.isArray(quiz) || quiz.length === 0) return [];
-
-  const indices = quiz.map((q) => q.correct);
-  const sameIndex = indices.every((i) => i === indices[0]);
-
-  if (sameIndex) {
-    quiz.forEach((q) => {
-      const correctText = q.options[q.correct];
+  const indices = quiz.map(q => q.correct);
+  if (indices.every(i => i === indices[0])) {
+    quiz.forEach(q => {
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-
-      [q.options[q.correct], q.options[newIndex]] = [
-        q.options[newIndex],
-        q.options[q.correct],
-      ];
-
+      [q.options[q.correct], q.options[newIndex]] = [q.options[newIndex], q.options[q.correct]];
       q.correct = newIndex;
     });
   }
   return quiz;
 }
 
-/* ================================ 🧠 Quiz Generation ================================ */
 async function generateQuiz(text) {
   const fetch = (await import("node-fetch")).default;
-
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -143,42 +140,24 @@ async function generateQuiz(text) {
     body: JSON.stringify({
       model: "gpt-4.1-mini",
       messages: [
-        {
-          role: "system",
-          content: `Generate exactly 8 MCQ questions.
-Return ONLY a valid JSON array:
-[{"question": "...", "options": ["...","...","...","..."], "correct": number}]
-Rules:
-- correct index must be true and NOT the same for all.
-- No explanation, no markdown.`,
-        },
+        { role: "system",
+          content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array. No markdown.` },
         { role: "user", content: text },
       ],
     }),
   });
-
   const data = await res.json();
-  let quizText = data.choices[0]?.message?.content || "";
-
-  quizText = quizText.replace(/```json|```/g, "").trim();
-
-  try {
-    const parsed = JSON.parse(quizText);
-    return fixQuizAnswers(parsed);
-  } catch (e) {
-    console.error("❌ Quiz parse error:", quizText);
-    return [];
-  }
+  try { return fixQuizAnswers(JSON.parse(data.choices[0]?.message?.content)); } 
+  catch { return []; }
 }
 
-/* ================================ 🗄️ MongoDB ================================ */
-mongoose
-  .connect(process.env.MONGO_URI)
+/* ================================ MONGO DB ================================ */
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("📌 MongoDB Connected"))
-  .catch((err) => console.error("Mongo Error:", err));
+  .catch(err => console.error("Mongo Error:", err));
 
-/* ================================ 🌐 Root ================================ */
+/* ================================ ROOT ================================ */
 app.get("/", (req, res) => res.send("LOOMIA API running"));
 
-/* ================================ 🚀 Server ================================ */
+/* ================================ SERVER ================================ */
 app.listen(5000, () => console.log("🔥 API running on port 5000"));

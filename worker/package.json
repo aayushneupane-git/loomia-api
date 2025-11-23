@@ -8,11 +8,14 @@
     "start": "node worker.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
     "axios": "^1.7.2",
-    "openai": "^4.58.1",
+    "bullmq": "^5.12.1",
     "dotenv": "^16.6.1",
-    "multer": "2.0.2",
-    "fs-extra": "^11.2.0"
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.2.0",
+    "ioredis": "^5.4.1",
+    "multer": "^2.0.2",
+    "openai": "^4.58.1"
   }
 }

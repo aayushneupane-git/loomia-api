@@ -7,25 +7,23 @@ services:
       - "5000:5000"
     environment:
       - OPENAI_API_KEY=
-    volumes:
       - ./uploads:/app/uploads
       - ./chunks:/app/chunks
     depends_on:
       - worker
+      - mongo
 
   worker:
     build: ./worker
     environment:
       - OPENAI_API_KEY=
-    volumes:
-      - ./uploads:/app/worker_uploads
-      - ./chunks:/app/chunks
     deploy:
       mode: replicated
-      replicas: 4  # parallel workers for speed
+      replicas: 8
 
   mongo:
     image: mongo
     restart: always
+    command: ["mongod", "--quiet"]
     ports:
       - "27017:27017"
