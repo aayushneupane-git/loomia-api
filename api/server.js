@@ -7,6 +7,9 @@ import axios from "axios";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import FormData from "form-data";
+import cors from "cors";
+
+dotenv.config();
 
 import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
@@ -15,7 +18,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-/* ================================ ROUTES ================================ */
+app.use(
+  cors({
+    origin: "http://localhost:3000", // your frontend URL
+    credentials: true,               // if you use cookies/auth headers
+  })
+);
+
+/* ================================ 📌 ROUTES ================================ */
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
