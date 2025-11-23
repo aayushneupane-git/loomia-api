@@ -6,7 +6,7 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - OPENAI_API_KEY=
+      - OPENAI_API_KEY=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
     volumes:
       - ./uploads:/app/uploads
       - ./chunks:/app/chunks
@@ -16,7 +16,7 @@ services:
   worker:
     build: ./worker
     environment:
-      - OPENAI_API_KEY=
+      - OPENAI_API_KEY=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
     volumes:
       - ./uploads:/app/worker_uploads
       - ./chunks:/app/chunks

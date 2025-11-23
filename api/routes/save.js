@@ -6,12 +6,13 @@ const router = express.Router();
 
 // Save data
 router.post("/save", authMiddleware, async (req, res) => {
-  const { title, summary, quiz } = req.body;
+  const { title, summary, quiz,transcript } = req.body;
 
   const saved = await SavedData.create({
     userId: req.userId,
     title,
     summary,
+    transcript,
     quiz
   });
 
