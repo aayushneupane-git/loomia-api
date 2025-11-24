@@ -6,7 +6,7 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - OPENAI_API_KEY=
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ./uploads:/app/uploads
       - ./chunks:/app/chunks
     depends_on:
@@ -16,7 +16,7 @@ services:
   worker:
     build: ./worker
     environment:
-      - OPENAI_API_KEY=
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     deploy:
       mode: replicated
       replicas: 8
