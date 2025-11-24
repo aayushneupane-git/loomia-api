@@ -18,19 +18,11 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-app.use(
-  cors({
-    origin: "http://localhost:3000", // frontend URL
-    credentials: true,
-  })
-);
+app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 
 /* ================================ SOCKET.IO ================================ */
 const httpServer = createServer(app);
-
-const io = new Server(httpServer, {
-  cors: { origin: "http://localhost:3000", credentials: true },
-});
+const io = new Server(httpServer, { cors: { origin: "http://localhost:3000", credentials: true } });
 
 function sendProgress(socketId, progress, message) {
   io.to(socketId).emit("uploadProgress", { progress, message });
@@ -44,24 +36,29 @@ io.on("connection", (socket) => {
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
-/* ================================ MULTER ================================ */
-const upload = multer({ storage: multer.memoryStorage() });
+/* ================================ MULTER (DISK STORAGE) ================================ */
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join("uploads", Date.now().toString());
+    fs.mkdirSync(uploadDir, { recursive: true });
+    req.uploadDir = uploadDir; // store path in request for later use
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, file.originalname);
+  }
+});
+const upload = multer({ storage });
 
 /* ================================ VIDEO UPLOAD ================================ */
 app.post("/upload", upload.single("video"), async (req, res) => {
-  const socketId = req.body.socketId; // frontend sends this
+  const socketId = req.body.socketId;
   try {
     if (!req.file) return res.status(400).json({ error: "No video uploaded" });
 
-    const timestamp = Date.now().toString();
-    const uploadDir = path.join("uploads", timestamp);
-    const chunkDir = path.join("chunks", timestamp);
-
-    fs.mkdirSync(uploadDir, { recursive: true });
+    const videoPath = req.file.path;
+    const chunkDir = path.join("chunks", Date.now().toString());
     fs.mkdirSync(chunkDir, { recursive: true });
-
-    const videoPath = path.join(uploadDir, req.file.originalname);
-    fs.writeFileSync(videoPath, req.file.buffer);
 
     sendProgress(socketId, 5, "Video saved, starting split...");
 
@@ -110,25 +107,18 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 function splitVideo(videoPath, outputDir) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
-      "-i",
-      videoPath,
-      "-c",
-      "copy",
-      "-f",
-      "segment",
-      "-segment_time",
-      "60",
-      "-reset_timestamps",
-      "1",
+      "-i", videoPath,
+      "-c", "copy",
+      "-f", "segment",
+      "-segment_time", "60",
+      "-reset_timestamps", "1",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
 
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
     ffmpeg.on("exit", (code) => {
       if (code !== 0) return reject(new Error("FFmpeg split failed"));
-      const chunks = fs
-        .readdirSync(outputDir)
-        .map((f) => path.join(outputDir, f));
+      const chunks = fs.readdirSync(outputDir).map(f => path.join(outputDir, f));
       resolve(chunks);
     });
   });
