@@ -53,6 +53,9 @@ const WORKERS = [
   "http://worker3:5001/process",
   "http://worker4:5001/process",
   "http://worker5:5001/process",
+  "http://worker6:5001/process",
+  "http://worker7:5001/process",
+  "http://worker8:5001/process",
 ];
 
 
