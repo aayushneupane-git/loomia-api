@@ -13,6 +13,7 @@ import { Server } from "socket.io";
 
 import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 const app = express();
@@ -53,6 +54,23 @@ const WORKERS = [
   "http://worker4:5001/process",
   "http://worker5:5001/process",
 ];
+
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+export const clearFolder = (folderPath) => {
+  if (fs.existsSync(folderPath)) {
+    fs.readdirSync(folderPath).forEach((file) => {
+      const curPath = path.join(folderPath, file);
+      if (fs.lstatSync(curPath).isDirectory()) {
+        clearFolder(curPath); // recursively delete sub-folders
+        fs.rmdirSync(curPath);
+      } else {
+        fs.unlinkSync(curPath);
+      }
+    });
+  }
+};
 
 /* ================================ VIDEO UPLOAD ================================ */
 app.post("/upload", upload.single("video"), async (req, res) => {
@@ -141,8 +159,9 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 
     // 🧹 Cleanup after sending response
     setTimeout(() => {
-      safeDeleteFolder(uploadDir);
-      safeDeleteFolder(chunkDir);
+      // After it’s fully done:
+      clearFolder(path.join(__dirname, "uploads"));
+      clearFolder(path.join(__dirname, "chunks"));
     }, 5000); // small delay so worker IO is fully done
   } catch (err) {
     console.error("UPLOAD ERROR:", err);
