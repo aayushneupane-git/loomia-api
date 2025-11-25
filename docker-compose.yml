@@ -7,23 +7,78 @@ services:
       - "5000:5000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MONGO_URI=mongodb://mongo:27017/loomia
+    volumes:
       - ./uploads:/app/uploads
       - ./chunks:/app/chunks
     depends_on:
-      - worker
+      - worker1
+      - worker2
+      - worker3
       - mongo
 
-  worker:
+  worker1:
     build: ./worker
+    container_name: worker1
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-    deploy:
-      mode: replicated
-      replicas: 8
+    ports:
+      - "5001:5001"
+
+  worker2:
+    build: ./worker
+    container_name: worker2
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5002:5001"
+
+  worker3:
+    build: ./worker
+    container_name: worker3
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5003:5001"
+  worker4:
+    build: ./worker
+    container_name: worker4
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5004:5001"
+  worker5:
+    build: ./worker
+    container_name: worker5
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5005:5001"
+  worker6:
+    build: ./worker
+    container_name: worker6
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5006:5001"
+  worker7:
+    build: ./worker
+    container_name: worker7
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5007:5001"
+  worker8:
+    build: ./worker
+    container_name: worker8
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "5008:5001"
 
   mongo:
     image: mongo
     restart: always
     command: ["mongod", "--quiet"]
     ports:
-      - "27017:27017"
+      - "27018:27017"

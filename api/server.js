@@ -20,83 +20,130 @@ app.use(express.json());
 
 app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 
-/* ================================ SOCKET.IO ================================ */
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: "http://localhost:3000", credentials: true } });
+const io = new Server(httpServer, {
+  cors: { origin: "http://localhost:3000", credentials: true },
+});
 
 function sendProgress(socketId, progress, message) {
   io.to(socketId).emit("uploadProgress", { progress, message });
 }
 
-io.on("connection", (socket) => {
-  console.log("Client connected:", socket.id);
-});
+io.on("connection", (socket) => console.log("Client connected:", socket.id));
 
-/* ================================ ROUTES ================================ */
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
-/* ================================ MULTER (DISK STORAGE) ================================ */
-const storage = multer.diskStorage({
+/* ================================ DISK STORAGE MULTER ================================ */
+const uploadStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join("uploads", Date.now().toString());
-    fs.mkdirSync(uploadDir, { recursive: true });
-    req.uploadDir = uploadDir; // store path in request for later use
+    const uploadDir = path.join("uploads");
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
-  filename: (req, file, cb) => {
-    cb(null, file.originalname);
-  }
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
 });
-const upload = multer({ storage });
+const upload = multer({ storage: uploadStorage });
+
+/* ================================ WORKERS ================================ */
+const WORKERS = [
+  "http://worker1:5001/process",
+  "http://worker2:5001/process",
+  "http://worker3:5001/process",
+  "http://worker4:5001/process",
+  "http://worker5:5001/process",
+];
 
 /* ================================ VIDEO UPLOAD ================================ */
 app.post("/upload", upload.single("video"), async (req, res) => {
   const socketId = req.body.socketId;
   try {
     if (!req.file) return res.status(400).json({ error: "No video uploaded" });
+    const uploadDir = path.dirname(req.file.path); // <-- FIXED HERE
 
-    const videoPath = req.file.path;
-    const chunkDir = path.join("chunks", Date.now().toString());
+    const timestamp = Date.now().toString();
+    const chunkDir = path.join("chunks", timestamp);
     fs.mkdirSync(chunkDir, { recursive: true });
 
+    const videoPath = req.file.path;
     sendProgress(socketId, 5, "Video saved, starting split...");
 
     const chunkFiles = await splitVideo(videoPath, chunkDir);
-
     sendProgress(socketId, 30, "Video split into chunks");
 
-    const transcriptionPromises = chunkFiles.map(async (filePath, idx) => {
-      const chunkProgress = 30 + ((idx + 1) / chunkFiles.length) * 50;
-      sendProgress(socketId, chunkProgress, `Processing chunk ${idx + 1}`);
-      try {
+    // Assign chunks to workers evenly
+    const totalChunks = chunkFiles.length;
+    const workersCount = WORKERS.length;
+    const chunksPerWorker = Math.ceil(totalChunks / workersCount);
+    const workerAssignments = [];
+
+    for (let i = 0; i < workersCount; i++) {
+      const start = i * chunksPerWorker;
+      const end = start + chunksPerWorker;
+      const series = chunkFiles.slice(start, end);
+      if (series.length > 0)
+        workerAssignments.push({ worker: WORKERS[i], series });
+    }
+
+    // Process each worker's series
+    const workerPromises = workerAssignments.map(async ({ worker, series }) => {
+      const chunkNames = series.map((f) => path.basename(f));
+      io.to(socketId).emit("workerStatus", {
+        worker,
+        chunks: chunkNames,
+        status: "processing",
+      });
+      console.log(
+        `Worker ${worker} processing chunks: ${chunkNames.join(", ")}`
+      );
+
+      const combinedText = [];
+      for (const filePath of series) {
         const form = new FormData();
         form.append("file", fs.createReadStream(filePath));
+        try {
+          const resp = await axios.post(worker, form, {
+            headers: form.getHeaders(),
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+          });
+          combinedText.push(resp.data.text || "");
 
-        const resp = await axios.post("http://worker:5001/process", form, {
-          headers: form.getHeaders(),
-          maxBodyLength: Infinity,
-          maxContentLength: Infinity,
-        });
-
-        return resp.data.text || "";
-      } catch (err) {
-        console.error(`Worker error on chunk ${idx}:`, err.response?.data || err.message);
-        return "";
+          io.to(socketId).emit("workerChunkProgress", {
+            worker,
+            chunk: path.basename(filePath),
+            status: "done",
+          });
+        } catch (err) {
+          console.error(
+            `Worker error on ${filePath}:`,
+            err.response?.data || err.message
+          );
+          io.to(socketId).emit("workerChunkProgress", {
+            worker,
+            chunk: path.basename(filePath),
+            status: "failed",
+          });
+        }
       }
+      return combinedText.join(" ");
     });
 
-    const transcriptions = await Promise.all(transcriptionPromises);
+    const seriesResults = await Promise.all(workerPromises);
+    const fullText = seriesResults.join(" ").trim();
 
-    sendProgress(socketId, 85, "Chunks processed, generating summary...");
-
-    const fullText = transcriptions.join(" ").trim();
+    sendProgress(socketId, 85, "All chunks processed, generating summary...");
     const summary = await summarizeText(fullText);
     const quiz = await generateQuiz(fullText);
 
     sendProgress(socketId, 100, "Processing complete!");
-
     res.json({ summary, fullText, quiz });
+
+    // 🧹 Cleanup after sending response
+    setTimeout(() => {
+      safeDeleteFolder(uploadDir);
+      safeDeleteFolder(chunkDir);
+    }, 5000); // small delay so worker IO is fully done
   } catch (err) {
     console.error("UPLOAD ERROR:", err);
     res.status(500).json({ error: "Upload processing failed" });
@@ -107,18 +154,24 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 function splitVideo(videoPath, outputDir) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
-      "-i", videoPath,
-      "-c", "copy",
-      "-f", "segment",
-      "-segment_time", "60",
-      "-reset_timestamps", "1",
+      "-i",
+      videoPath,
+      "-c",
+      "copy",
+      "-f",
+      "segment",
+      "-segment_time",
+      "60",
+      "-reset_timestamps",
+      "1",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
-
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
     ffmpeg.on("exit", (code) => {
       if (code !== 0) return reject(new Error("FFmpeg split failed"));
-      const chunks = fs.readdirSync(outputDir).map(f => path.join(outputDir, f));
+      const chunks = fs
+        .readdirSync(outputDir)
+        .map((f) => path.join(outputDir, f));
       resolve(chunks);
     });
   });
@@ -148,21 +201,16 @@ async function summarizeText(text) {
 /* ================================ QUIZ GENERATION ================================ */
 function fixQuizAnswers(quiz) {
   if (!Array.isArray(quiz) || quiz.length === 0) return [];
-
   const indices = quiz.map((q) => q.correct);
   const sameIndex = indices.every((i) => i === indices[0]);
-
   if (sameIndex) {
     quiz.forEach((q) => {
-      const correctText = q.options[q.correct];
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-
       [q.options[q.correct], q.options[newIndex]] = [
         q.options[newIndex],
         q.options[q.correct],
       ];
-
       q.correct = newIndex;
     });
   }
@@ -183,12 +231,7 @@ async function generateQuiz(text) {
         messages: [
           {
             role: "system",
-            content: `Generate exactly 8 MCQ questions.
-Return ONLY a valid JSON array:
-[{"question": "...", "options": ["...","...","...","..."], "correct": number}]
-Rules:
-- Correct index must be correct and different for each question.
-- No explanations, no markdown.`,
+            content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array: [{"question": "...", "options": ["...","...","...","..."], "correct": number}]. Rules: correct index must be different for each question, no explanations or markdown. Options answers must be 0-3`,
           },
           { role: "user", content: text },
         ],
@@ -206,15 +249,22 @@ Rules:
   }
 }
 
+function safeDeleteFolder(folderPath) {
+  if (fs.existsSync(folderPath)) {
+    fs.rm(folderPath, { recursive: true, force: true }, (err) => {
+      if (err) console.error("❌ Failed to delete:", folderPath, err);
+      else console.log("🧹 Deleted:", folderPath);
+    });
+  }
+}
+
 /* ================================ MONGO DB ================================ */
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("📌 MongoDB Connected"))
   .catch((err) => console.error("Mongo Error:", err));
 
-/* ================================ ROOT ================================ */
 app.get("/", (req, res) => res.send("LOOMIA API running"));
 
-/* ================================ SERVER ================================ */
 const PORT = 5000;
 httpServer.listen(PORT, () => console.log(`🔥 API running on port ${PORT}`));
