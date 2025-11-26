@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "path";
 import { spawn } from "child_process";
 import fs from "fs";
+import fsPromises from "fs/promises";
 import axios from "axios";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -10,15 +11,14 @@ import FormData from "form-data";
 import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { fileURLToPath } from "url";
 
 import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
-import { fileURLToPath } from "url";
 
 dotenv.config();
 const app = express();
 app.use(express.json());
-
 app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 
 const httpServer = createServer(app);
@@ -35,11 +35,11 @@ io.on("connection", (socket) => console.log("Client connected:", socket.id));
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
-/* ================================ DISK STORAGE MULTER ================================ */
+/* ================================ MULTER STORAGE ================================ */
 const uploadStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join("uploads");
-    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  destination: async (req, file, cb) => {
+    const uploadDir = "/tmp/uploads"; // faster ephemeral storage
+    await fsPromises.mkdir(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
@@ -54,20 +54,22 @@ const WORKERS = [
   "http://worker4:5001/process",
 ];
 
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-export const clearFolder = (folderPath) => {
+
+/* ================================ ASYNC CLEANUP ================================ */
+export const clearFolder = async (folderPath) => {
   if (fs.existsSync(folderPath)) {
-    fs.readdirSync(folderPath).forEach((file) => {
-      const curPath = path.join(folderPath, file);
-      if (fs.lstatSync(curPath).isDirectory()) {
-        clearFolder(curPath); // recursively delete sub-folders
-        fs.rmdirSync(curPath);
-      } else {
-        fs.unlinkSync(curPath);
-      }
-    });
+    const files = await fsPromises.readdir(folderPath);
+    await Promise.all(
+      files.map(async (file) => {
+        const curPath = path.join(folderPath, file);
+        const stats = await fsPromises.lstat(curPath);
+        if (stats.isDirectory()) await clearFolder(curPath);
+        else await fsPromises.unlink(curPath);
+      })
+    );
+    await fsPromises.rmdir(folderPath);
   }
 };
 
@@ -76,11 +78,10 @@ app.post("/upload", upload.single("video"), async (req, res) => {
   const socketId = req.body.socketId;
   try {
     if (!req.file) return res.status(400).json({ error: "No video uploaded" });
-    const uploadDir = path.dirname(req.file.path); // <-- FIXED HERE
 
     const timestamp = Date.now().toString();
-    const chunkDir = path.join("chunks", timestamp);
-    fs.mkdirSync(chunkDir, { recursive: true });
+    const chunkDir = path.join("/tmp/chunks", timestamp);
+    await fsPromises.mkdir(chunkDir, { recursive: true });
 
     const videoPath = req.file.path;
     sendProgress(socketId, 5, "Video saved, starting split...");
@@ -90,78 +91,67 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 
     // Assign chunks to workers evenly
     const totalChunks = chunkFiles.length;
-    const workersCount = WORKERS.length;
-    const chunksPerWorker = Math.ceil(totalChunks / workersCount);
+    const chunksPerWorker = Math.ceil(totalChunks / WORKERS.length);
     const workerAssignments = [];
 
-    for (let i = 0; i < workersCount; i++) {
+    for (let i = 0; i < WORKERS.length; i++) {
       const start = i * chunksPerWorker;
       const end = start + chunksPerWorker;
       const series = chunkFiles.slice(start, end);
-      if (series.length > 0)
-        workerAssignments.push({ worker: WORKERS[i], series });
+      if (series.length > 0) workerAssignments.push({ worker: WORKERS[i], series });
     }
 
-    // Process each worker's series
-    const workerPromises = workerAssignments.map(async ({ worker, series }) => {
-      const chunkNames = series.map((f) => path.basename(f));
-      io.to(socketId).emit("workerStatus", {
-        worker,
-        chunks: chunkNames,
-        status: "processing",
-      });
-      console.log(
-        `Worker ${worker} processing chunks: ${chunkNames.join(", ")}`
-      );
+    // Process each worker's series in parallel
+    const workerResults = await Promise.all(
+      workerAssignments.map(async ({ worker, series }) => {
+        const texts = await Promise.all(
+          series.map(async (filePath) => {
+            const form = new FormData();
+            form.append("file", fs.createReadStream(filePath));
+            try {
+              const resp = await axios.post(worker, form, {
+                headers: form.getHeaders(),
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity,
+              });
+              io.to(socketId).emit("workerChunkProgress", {
+                worker,
+                chunk: path.basename(filePath),
+                status: "done",
+              });
+              return resp.data.text || "";
+            } catch (err) {
+              console.error(`Worker error on ${filePath}:`, err.message);
+              io.to(socketId).emit("workerChunkProgress", {
+                worker,
+                chunk: path.basename(filePath),
+                status: "failed",
+              });
+              return "";
+            }
+          })
+        );
+        return texts.join(" ");
+      })
+    );
 
-      const combinedText = [];
-      for (const filePath of series) {
-        const form = new FormData();
-        form.append("file", fs.createReadStream(filePath));
-        try {
-          const resp = await axios.post(worker, form, {
-            headers: form.getHeaders(),
-            maxBodyLength: Infinity,
-            maxContentLength: Infinity,
-          });
-          combinedText.push(resp.data.text || "");
+    const fullText = workerResults.join(" ").trim();
+    sendProgress(socketId, 85, "All chunks processed, generating summary and quiz...");
 
-          io.to(socketId).emit("workerChunkProgress", {
-            worker,
-            chunk: path.basename(filePath),
-            status: "done",
-          });
-        } catch (err) {
-          console.error(
-            `Worker error on ${filePath}:`,
-            err.response?.data || err.message
-          );
-          io.to(socketId).emit("workerChunkProgress", {
-            worker,
-            chunk: path.basename(filePath),
-            status: "failed",
-          });
-        }
-      }
-      return combinedText.join(" ");
-    });
-
-    const seriesResults = await Promise.all(workerPromises);
-    const fullText = seriesResults.join(" ").trim();
-
-    sendProgress(socketId, 85, "All chunks processed, generating summary...");
-    const summary = await summarizeText(fullText);
-    const quiz = await generateQuiz(fullText);
+    // Summarization & quiz in parallel
+    const [summary, quiz] = await Promise.all([
+      summarizeText(fullText),
+      generateQuiz(fullText),
+    ]);
 
     sendProgress(socketId, 100, "Processing complete!");
     res.json({ summary, fullText, quiz });
 
-    // 🧹 Cleanup after sending response
-    setTimeout(() => {
-      // After it’s fully done:
-      clearFolder(path.join(__dirname, "uploads"));
-      clearFolder(path.join(__dirname, "chunks"));
-    }, 5000); // small delay so worker IO is fully done
+    // Cleanup
+    setTimeout(async () => {
+      await clearFolder("/tmp/uploads");
+      await clearFolder("/tmp/chunks");
+    }, 2000);
   } catch (err) {
     console.error("UPLOAD ERROR:", err);
     res.status(500).json({ error: "Upload processing failed" });
@@ -182,8 +172,11 @@ function splitVideo(videoPath, outputDir) {
       "60",
       "-reset_timestamps",
       "1",
+      "-threads",
+      "0",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
+
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
     ffmpeg.on("exit", (code) => {
       if (code !== 0) return reject(new Error("FFmpeg split failed"));
@@ -225,10 +218,7 @@ function fixQuizAnswers(quiz) {
     quiz.forEach((q) => {
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-      [q.options[q.correct], q.options[newIndex]] = [
-        q.options[newIndex],
-        q.options[q.correct],
-      ];
+      [q.options[q.correct], q.options[newIndex]] = [q.options[newIndex], q.options[q.correct]];
       q.correct = newIndex;
     });
   }
@@ -264,15 +254,6 @@ async function generateQuiz(text) {
   } catch (error) {
     console.error("❌ Quiz parse error or fetch failed:", error);
     return [];
-  }
-}
-
-function safeDeleteFolder(folderPath) {
-  if (fs.existsSync(folderPath)) {
-    fs.rm(folderPath, { recursive: true, force: true }, (err) => {
-      if (err) console.error("❌ Failed to delete:", folderPath, err);
-      else console.log("🧹 Deleted:", folderPath);
-    });
   }
 }
 
