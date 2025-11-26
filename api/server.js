@@ -51,7 +51,6 @@ const WORKERS = [
   "http://worker1:5001/process",
   "http://worker2:5001/process",
   "http://worker3:5001/process",
-  "http://worker4:5001/process",
 ];
 
 const __filename = fileURLToPath(import.meta.url);

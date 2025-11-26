@@ -47,35 +47,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     ports:
       - "5004:5001"
-  worker5:
-    build: ./worker
-    container_name: worker5
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "5005:5001"
-  worker6:
-    build: ./worker
-    container_name: worker6
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "5006:5001"
-  worker7:
-    build: ./worker
-    container_name: worker7
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "5007:5001"
-  worker8:
-    build: ./worker
-    container_name: worker8
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-    ports:
-      - "5008:5001"
-
   mongo:
     image: mongo
     restart: always
