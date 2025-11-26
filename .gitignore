@@ -6,3 +6,5 @@
 
 # Ignore environment file
 .env
+
+/mongo_data/
