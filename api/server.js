@@ -19,7 +19,13 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: "https://www.loomia.fun", credentials: true }));
+app.use(
+  cors({
+    origin: "https://www.loomia.fun",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true, // if you need cookies
+  })
+);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -97,7 +103,8 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       const start = i * chunksPerWorker;
       const end = start + chunksPerWorker;
       const series = chunkFiles.slice(start, end);
-      if (series.length > 0) workerAssignments.push({ worker: WORKERS[i], series });
+      if (series.length > 0)
+        workerAssignments.push({ worker: WORKERS[i], series });
     }
 
     // Process each worker's series in parallel
@@ -135,7 +142,11 @@ app.post("/upload", upload.single("video"), async (req, res) => {
     );
 
     const fullText = workerResults.join(" ").trim();
-    sendProgress(socketId, 85, "All chunks processed, generating summary and quiz...");
+    sendProgress(
+      socketId,
+      85,
+      "All chunks processed, generating summary and quiz..."
+    );
 
     // Summarization & quiz in parallel
     const [summary, quiz] = await Promise.all([
@@ -217,7 +228,10 @@ function fixQuizAnswers(quiz) {
     quiz.forEach((q) => {
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-      [q.options[q.correct], q.options[newIndex]] = [q.options[newIndex], q.options[q.correct]];
+      [q.options[q.correct], q.options[newIndex]] = [
+        q.options[newIndex],
+        q.options[q.correct],
+      ];
       q.correct = newIndex;
     });
   }
