@@ -18,33 +18,44 @@ import saveRoutes from "./routes/save.js";
 
 dotenv.config();
 const app = express();
+
+// ====== CORS CONFIG ======
+app.use(cors({
+  origin: "https://www.loomia.fun",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+  credentials: true
+}));
+
+// Handle preflight OPTIONS globally
+app.options("*", cors({
+  origin: "https://www.loomia.fun",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+  credentials: true
+}));
+
 app.use(express.json());
-app.use(
-  cors({
-    origin: "https://www.loomia.fun",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true, // if you need cookies
-  })
-);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "https://www.loomia.fun", credentials: true },
 });
 
+io.on("connection", (socket) => console.log("Client connected:", socket.id));
+
 function sendProgress(socketId, progress, message) {
   io.to(socketId).emit("uploadProgress", { progress, message });
 }
 
-io.on("connection", (socket) => console.log("Client connected:", socket.id));
-
+// ====== ROUTES ======
 app.use("/auth", authRoutes);
 app.use("/data", saveRoutes);
 
-/* ================================ MULTER STORAGE ================================ */
+// ====== MULTER STORAGE ======
 const uploadStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    const uploadDir = "/tmp/uploads"; // faster ephemeral storage
+    const uploadDir = "/tmp/uploads";
     await fsPromises.mkdir(uploadDir, { recursive: true });
     cb(null, uploadDir);
   },
@@ -52,7 +63,7 @@ const uploadStorage = multer.diskStorage({
 });
 const upload = multer({ storage: uploadStorage });
 
-/* ================================ WORKERS ================================ */
+// ====== WORKERS ======
 const WORKERS = [
   "http://worker1:5001/process",
   "http://worker2:5001/process",
@@ -62,23 +73,21 @@ const WORKERS = [
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ================================ ASYNC CLEANUP ================================ */
+// ====== ASYNC CLEANUP ======
 export const clearFolder = async (folderPath) => {
   if (fs.existsSync(folderPath)) {
     const files = await fsPromises.readdir(folderPath);
-    await Promise.all(
-      files.map(async (file) => {
-        const curPath = path.join(folderPath, file);
-        const stats = await fsPromises.lstat(curPath);
-        if (stats.isDirectory()) await clearFolder(curPath);
-        else await fsPromises.unlink(curPath);
-      })
-    );
+    await Promise.all(files.map(async (file) => {
+      const curPath = path.join(folderPath, file);
+      const stats = await fsPromises.lstat(curPath);
+      if (stats.isDirectory()) await clearFolder(curPath);
+      else await fsPromises.unlink(curPath);
+    }));
     await fsPromises.rmdir(folderPath);
   }
 };
 
-/* ================================ VIDEO UPLOAD ================================ */
+// ====== VIDEO UPLOAD ======
 app.post("/upload", upload.single("video"), async (req, res) => {
   const socketId = req.body.socketId;
   try {
@@ -107,7 +116,7 @@ app.post("/upload", upload.single("video"), async (req, res) => {
         workerAssignments.push({ worker: WORKERS[i], series });
     }
 
-    // Process each worker's series in parallel
+    // Process chunks on workers
     const workerResults = await Promise.all(
       workerAssignments.map(async ({ worker, series }) => {
         const texts = await Promise.all(
@@ -142,13 +151,8 @@ app.post("/upload", upload.single("video"), async (req, res) => {
     );
 
     const fullText = workerResults.join(" ").trim();
-    sendProgress(
-      socketId,
-      85,
-      "All chunks processed, generating summary and quiz..."
-    );
+    sendProgress(socketId, 85, "All chunks processed, generating summary and quiz...");
 
-    // Summarization & quiz in parallel
     const [summary, quiz] = await Promise.all([
       summarizeText(fullText),
       generateQuiz(fullText),
@@ -157,7 +161,6 @@ app.post("/upload", upload.single("video"), async (req, res) => {
     sendProgress(socketId, 100, "Processing complete!");
     res.json({ summary, fullText, quiz });
 
-    // Cleanup
     setTimeout(async () => {
       await clearFolder("/tmp/uploads");
       await clearFolder("/tmp/chunks");
@@ -168,37 +171,29 @@ app.post("/upload", upload.single("video"), async (req, res) => {
   }
 });
 
-/* ================================ VIDEO SPLIT ================================ */
+// ====== VIDEO SPLIT ======
 function splitVideo(videoPath, outputDir) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
-      "-i",
-      videoPath,
-      "-c",
-      "copy",
-      "-f",
-      "segment",
-      "-segment_time",
-      "60",
-      "-reset_timestamps",
-      "1",
-      "-threads",
-      "0",
+      "-i", videoPath,
+      "-c", "copy",
+      "-f", "segment",
+      "-segment_time", "60",
+      "-reset_timestamps", "1",
+      "-threads", "0",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
 
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
     ffmpeg.on("exit", (code) => {
       if (code !== 0) return reject(new Error("FFmpeg split failed"));
-      const chunks = fs
-        .readdirSync(outputDir)
-        .map((f) => path.join(outputDir, f));
+      const chunks = fs.readdirSync(outputDir).map(f => path.join(outputDir, f));
       resolve(chunks);
     });
   });
 }
 
-/* ================================ SUMMARIZATION ================================ */
+// ====== SUMMARIZATION ======
 async function summarizeText(text) {
   const fetch = (await import("node-fetch")).default;
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -219,19 +214,16 @@ async function summarizeText(text) {
   return data.choices?.[0]?.message?.content || "";
 }
 
-/* ================================ QUIZ GENERATION ================================ */
+// ====== QUIZ GENERATION ======
 function fixQuizAnswers(quiz) {
   if (!Array.isArray(quiz) || quiz.length === 0) return [];
-  const indices = quiz.map((q) => q.correct);
-  const sameIndex = indices.every((i) => i === indices[0]);
+  const indices = quiz.map(q => q.correct);
+  const sameIndex = indices.every(i => i === indices[0]);
   if (sameIndex) {
-    quiz.forEach((q) => {
+    quiz.forEach(q => {
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-      [q.options[q.correct], q.options[newIndex]] = [
-        q.options[newIndex],
-        q.options[q.correct],
-      ];
+      [q.options[q.correct], q.options[newIndex]] = [q.options[newIndex], q.options[q.correct]];
       q.correct = newIndex;
     });
   }
@@ -252,7 +244,7 @@ async function generateQuiz(text) {
         messages: [
           {
             role: "system",
-            content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array: [{"question": "...", "options": ["...","...","...","..."], "correct": number}]. Rules: correct index must be different for each question, no explanations or markdown. Options answers must be 0-3`,
+            content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array: [{"question": "...", "options": ["...","...","...","..."], "correct": number}]. Rules: correct index must be different for each question, no explanations or markdown. Options answers must be 0-3`
           },
           { role: "user", content: text },
         ],
@@ -270,11 +262,10 @@ async function generateQuiz(text) {
   }
 }
 
-/* ================================ MONGO DB ================================ */
-mongoose
-  .connect(process.env.MONGO_URI)
+// ====== MONGO DB ======
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("📌 MongoDB Connected"))
-  .catch((err) => console.error("Mongo Error:", err));
+  .catch(err => console.error("Mongo Error:", err));
 
 app.get("/", (req, res) => res.send("LOOMIA API running"));
 
