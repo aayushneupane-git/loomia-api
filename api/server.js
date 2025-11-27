@@ -18,34 +18,15 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 
-const allowedOrigins = [
-  "https://www.loomia.fun", // Your production site
-  "https://loomia.fun", // No www (just in case)
-  "http://localhost:3000", // For development
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // allow REST tools & postman which have no origin
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-  })
-);
-
-// Preflight
-app.options("*", cors());
+app.use(cors());
+app.use(express.json());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
-    credentials: true,
-  },
+    origin: true,
+    credentials: true
+  }
 });
 
 io.on("connection", (socket) => console.log("Client connected:", socket.id));
