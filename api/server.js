@@ -19,23 +19,18 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 
-// ====== CORS CONFIG ======
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
-  credentials: true
-}));
+// ====== CORS CONFIG =====
+const corsOptions = {
+  origin: ["https://www.loomia.fun", "http://localhost:3000"], // Add allowed origins
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Allowed methods
+};
 
-// Handle preflight OPTIONS globally
-app.options("*", cors({
-  origin: "https://www.loomia.fun",
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
-  credentials: true
-}));
+
 
 app.use(express.json());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // Enable pre-flight for all routes
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
