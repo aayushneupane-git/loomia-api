@@ -29,7 +29,7 @@ app.use(
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "http://localhost:3000", credentials: true },
+  cors: { origin: "https://www.loomia.fun", credentials: true },
 });
 
 function sendProgress(socketId, progress, message) {
