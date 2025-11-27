@@ -21,12 +21,8 @@ const app = express();
 app.use(express.json());
 
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: true,
-    credentials: true,
-  },
-});
+const io = new Server(httpServer);
+
 
 io.on("connection", (socket) => console.log("Client connected:", socket.id));
 
