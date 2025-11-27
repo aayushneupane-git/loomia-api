@@ -18,15 +18,22 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 
-app.use(cors());
+const corsOptions = {
+  origin: "http://localhost:3000", // frontend URL
+  credentials: true, // allow cookies/auth headers
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: true,
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 io.on("connection", (socket) => console.log("Client connected:", socket.id));
