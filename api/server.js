@@ -18,14 +18,6 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 
-const corsOptions = {
-  origin: "http://localhost:3000", // frontend URL
-  credentials: true, // allow cookies/auth headers
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-};
-
-app.use(cors(corsOptions));
 app.use(express.json());
 
 const httpServer = createServer(app);
