@@ -8,33 +8,44 @@ import axios from "axios";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import FormData from "form-data";
-import cors from "cors";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { fileURLToPath } from "url";
-
+import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
 
 dotenv.config();
 const app = express();
 
-// ====== CORS CONFIG =====
-const corsOptions = {
-  origin: ["https://www.loomia.fun", "http://localhost:3000"], // Add allowed origins
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // Allowed methods
-};
+const allowedOrigins = [
+  "https://www.loomia.fun", // Your production site
+  "https://loomia.fun", // No www (just in case)
+  "http://localhost:3000", // For development
+];
 
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // allow REST tools & postman which have no origin
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+);
 
-
-app.use(express.json());
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // Enable pre-flight for all routes
+// Preflight
+app.options("*", cors());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "https://www.loomia.fun", credentials: true },
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+  },
 });
 
 io.on("connection", (socket) => console.log("Client connected:", socket.id));
@@ -42,6 +53,8 @@ io.on("connection", (socket) => console.log("Client connected:", socket.id));
 function sendProgress(socketId, progress, message) {
   io.to(socketId).emit("uploadProgress", { progress, message });
 }
+app.use(express.json()); // <== must be BEFORE routes!!!
+app.use(express.urlencoded({ extended: true })); // good for form uploads
 
 // ====== ROUTES ======
 app.use("/auth", authRoutes);
@@ -72,12 +85,14 @@ const __dirname = path.dirname(__filename);
 export const clearFolder = async (folderPath) => {
   if (fs.existsSync(folderPath)) {
     const files = await fsPromises.readdir(folderPath);
-    await Promise.all(files.map(async (file) => {
-      const curPath = path.join(folderPath, file);
-      const stats = await fsPromises.lstat(curPath);
-      if (stats.isDirectory()) await clearFolder(curPath);
-      else await fsPromises.unlink(curPath);
-    }));
+    await Promise.all(
+      files.map(async (file) => {
+        const curPath = path.join(folderPath, file);
+        const stats = await fsPromises.lstat(curPath);
+        if (stats.isDirectory()) await clearFolder(curPath);
+        else await fsPromises.unlink(curPath);
+      })
+    );
     await fsPromises.rmdir(folderPath);
   }
 };
@@ -146,7 +161,11 @@ app.post("/upload", upload.single("video"), async (req, res) => {
     );
 
     const fullText = workerResults.join(" ").trim();
-    sendProgress(socketId, 85, "All chunks processed, generating summary and quiz...");
+    sendProgress(
+      socketId,
+      85,
+      "All chunks processed, generating summary and quiz..."
+    );
 
     const [summary, quiz] = await Promise.all([
       summarizeText(fullText),
@@ -170,19 +189,27 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 function splitVideo(videoPath, outputDir) {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn("ffmpeg", [
-      "-i", videoPath,
-      "-c", "copy",
-      "-f", "segment",
-      "-segment_time", "60",
-      "-reset_timestamps", "1",
-      "-threads", "0",
+      "-i",
+      videoPath,
+      "-c",
+      "copy",
+      "-f",
+      "segment",
+      "-segment_time",
+      "60",
+      "-reset_timestamps",
+      "1",
+      "-threads",
+      "0",
       path.join(outputDir, "chunk_%03d.mp4"),
     ]);
 
     ffmpeg.stderr.on("data", (data) => console.log(`FFmpeg: ${data}`));
     ffmpeg.on("exit", (code) => {
       if (code !== 0) return reject(new Error("FFmpeg split failed"));
-      const chunks = fs.readdirSync(outputDir).map(f => path.join(outputDir, f));
+      const chunks = fs
+        .readdirSync(outputDir)
+        .map((f) => path.join(outputDir, f));
       resolve(chunks);
     });
   });
@@ -212,13 +239,16 @@ async function summarizeText(text) {
 // ====== QUIZ GENERATION ======
 function fixQuizAnswers(quiz) {
   if (!Array.isArray(quiz) || quiz.length === 0) return [];
-  const indices = quiz.map(q => q.correct);
-  const sameIndex = indices.every(i => i === indices[0]);
+  const indices = quiz.map((q) => q.correct);
+  const sameIndex = indices.every((i) => i === indices[0]);
   if (sameIndex) {
-    quiz.forEach(q => {
+    quiz.forEach((q) => {
       let newIndex = Math.floor(Math.random() * 4);
       if (newIndex === q.correct) newIndex = (newIndex + 1) % 4;
-      [q.options[q.correct], q.options[newIndex]] = [q.options[newIndex], q.options[q.correct]];
+      [q.options[q.correct], q.options[newIndex]] = [
+        q.options[newIndex],
+        q.options[q.correct],
+      ];
       q.correct = newIndex;
     });
   }
@@ -239,7 +269,7 @@ async function generateQuiz(text) {
         messages: [
           {
             role: "system",
-            content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array: [{"question": "...", "options": ["...","...","...","..."], "correct": number}]. Rules: correct index must be different for each question, no explanations or markdown. Options answers must be 0-3`
+            content: `Generate exactly 8 MCQ questions. Return ONLY a valid JSON array: [{"question": "...", "options": ["...","...","...","..."], "correct": number}]. Rules: correct index must be different for each question, no explanations or markdown. Options answers must be 0-3`,
           },
           { role: "user", content: text },
         ],
@@ -258,9 +288,10 @@ async function generateQuiz(text) {
 }
 
 // ====== MONGO DB ======
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("📌 MongoDB Connected"))
-  .catch(err => console.error("Mongo Error:", err));
+  .catch((err) => console.error("Mongo Error:", err));
 
 app.get("/", (req, res) => res.send("LOOMIA API running"));
 
