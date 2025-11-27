@@ -19,7 +19,7 @@ import saveRoutes from "./routes/save.js";
 dotenv.config();
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: "http://localhost:3000", credentials: true }));
+app.use(cors({ origin: "https://loomia.fun", credentials: true }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
