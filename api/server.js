@@ -10,7 +10,6 @@ import dotenv from "dotenv";
 import FormData from "form-data";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import saveRoutes from "./routes/save.js";
 import { rimraf } from "rimraf";
@@ -18,24 +17,6 @@ import { rimraf } from "rimraf";
 dotenv.config();
 
 const app = express();
-
-// ====== CORS ======
-const allowedOrigins = [
-  "https://loomia.fun",
-  "https://www.loomia.fun",
-  "http://localhost:3000",
-];
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-  })
-);
-app.options("*", cors());
 
 // ====== BODY PARSERS ======
 app.use(express.json());
@@ -47,12 +28,7 @@ app.use("/data", saveRoutes);
 
 // ====== HTTP + SOCKET.IO ======
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-  },
-});
+const io = new Server(httpServer);
 
 io.on("connection", (socket) => console.log("Socket connected:", socket.id));
 
@@ -74,7 +50,7 @@ const uploadStorage = multer.diskStorage({
     const jobId = Date.now().toString();
     const dir = `/tmp/uploads/${jobId}`;
     await fs.mkdir(dir, { recursive: true });
-    req.uploadDir = dir; // save for later
+    req.uploadDir = dir; // save for cleanup
     cb(null, dir);
   },
   filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
@@ -171,7 +147,7 @@ async function generateQuiz(text) {
 // ====================
 // QUEUE SYSTEM
 // ====================
-const jobResults = new Map(); // { jobId: {status, summary, quiz, fullText} }
+const jobResults = new Map();
 let isBusy = false;
 const jobQueue = [];
 
@@ -179,7 +155,6 @@ async function processJob(job) {
   const { req, jobId } = job;
   const socketId = req.body.socketId;
 
-  // Per-job folders
   const uploadDir = req.uploadDir;
   const chunkDir = `/tmp/chunks/${jobId}`;
   await fs.mkdir(chunkDir, { recursive: true });
